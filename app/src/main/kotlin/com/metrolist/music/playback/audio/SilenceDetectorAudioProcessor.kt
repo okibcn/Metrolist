@@ -34,6 +34,11 @@ class SilenceDetectorAudioProcessor(
 
     @Volatile
     var instantModeEnabled: Boolean = false
+        set(value) {
+            field = value
+            // Silence state is no longer meaningful when disabling
+            if (!value) clearSilenceState()
+        }
 
     @Volatile
     private var consecutiveSilentFrames: Long = 0
@@ -55,7 +60,10 @@ class SilenceDetectorAudioProcessor(
         return inputAudioFormat
     }
 
-    override fun isActive(): Boolean = true
+    // Only insert into the pipeline when silence detection is actually needed.
+    // When inactive, ExoPlayer routes audio directly to AudioTrack — giving
+    // JamesDSP a clean unmodified stream to capture.
+    override fun isActive(): Boolean = instantModeEnabled
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (!inputBuffer.hasRemaining()) {
@@ -63,11 +71,9 @@ class SilenceDetectorAudioProcessor(
             return
         }
 
-        // Analyze the incoming PCM for silence without mutating the buffer position.
-        if (instantModeEnabled && sampleRate > 0 && channelCount > 0) {
+        // isActive() == true here means instantModeEnabled is true
+        if (sampleRate > 0 && channelCount > 0) {
             detectSilence(inputBuffer)
-        } else {
-            clearSilenceState()
         }
 
         val out = replaceOutputBuffer(inputBuffer.remaining())
@@ -76,7 +82,6 @@ class SilenceDetectorAudioProcessor(
     }
 
     private fun detectSilence(inputBuffer: ByteBuffer) {
-        // Ensure predictable endian access for getShort(index).
         inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
 
         val frameCount = inputBuffer.remaining() / 2 / channelCount
