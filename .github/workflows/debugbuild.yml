@@ -49,6 +49,9 @@ jobs:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
           cache-read-only: false
 
+      - name: Setup and Generate Protobuf
+        uses: ./.github/actions/setup-protobuf
+
       # ── 5. SIGNING ─────────────────────────────────────────────────────────────
       #   - Si DEBUG_KEYSTORE_BASE64 existe → lo decodifica y lo usa (firma consistente)
       #   - Si no existe               → genera uno aleatorio con aviso (firma efímera)
