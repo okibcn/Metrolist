@@ -264,6 +264,7 @@ class MusicService :
     private var crossfadeDuration = 5000f
     private var crossfadeGapless = true
     private var crossfadeTriggerJob: Job? = null
+    private var closeAudioEffectJob: Job? = null
 
     private val secondaryPlayerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
@@ -1121,11 +1122,10 @@ class MusicService :
 
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                 hasAudioFocus = false
-                audioFocusVolumeMultiplier.value = 1f
+                // Duck volume instead of pausing — prevents sound processors activation
+                // from triggering a full stop when it briefly requests audio focus
+                audioFocusVolumeMultiplier.value = 0.2f
                 wasPlayingBeforeAudioFocusLoss = player.isPlaying
-                if (player.isPlaying) {
-                    player.pause()
-                }
                 lastAudioFocusState = focusChange
             }
 
@@ -1147,7 +1147,6 @@ class MusicService :
             }
         }
     }
-
     private fun requestAudioFocus(): Boolean {
         if (hasAudioFocus) return true
 
@@ -2190,12 +2189,19 @@ class MusicService :
             val isBufferingOrReady =
                 player.playbackState == Player.STATE_BUFFERING || player.playbackState == Player.STATE_READY
             if (isBufferingOrReady && player.playWhenReady) {
+                closeAudioEffectJob?.cancel()
                 val focusGranted = requestAudioFocus()
                 if (focusGranted) {
                     openAudioEffectSession()
                 }
             } else {
-                closeAudioEffectSession()
+                closeAudioEffectJob?.cancel()
+                closeAudioEffectJob = scope.launch {
+                    delay(500)
+                    if (!player.isPlaying && !player.playWhenReady) {
+                        closeAudioEffectSession()
+                    }
+                }
             }
         }
         if (events.containsAny(EVENT_TIMELINE_CHANGED, EVENT_POSITION_DISCONTINUITY)) {
@@ -2242,7 +2248,6 @@ class MusicService :
         if (events.containsAny(Player.EVENT_IS_PLAYING_CHANGED)) {
             scrobbleManager?.onPlayerStateChanged(player.isPlaying, player.currentMetadata, duration = player.duration)
         }
-
     }
 
     override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
@@ -3559,6 +3564,13 @@ class MusicService :
             timber.log.Timber.e(e, "Failed to swap player in MediaSession")
         }
 
+        // Re-open the audio effect session with the new player's audioSessionId
+        // so that 3rd party effect processors stay attached after crossfade
+        if (isAudioEffectSessionOpened) {
+            isAudioEffectSessionOpened = false
+            openAudioEffectSession()
+        }
+
         crossfadeJob = scope.launch {
             val duration = crossfadeDuration.toLong()
             val steps = 20
@@ -3607,6 +3619,7 @@ class MusicService :
         isCrossfading = false
         applyEffectiveVolume()
         sleepTimer.notifySongTransition()
+        setupLoudnessEnhancer()
     }
 
     companion object {
